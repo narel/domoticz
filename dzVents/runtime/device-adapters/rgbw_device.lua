@@ -13,6 +13,7 @@ return {
 		adapterManager.addDummyMethod(device, 'setNightMode')
 		adapterManager.addDummyMethod(device, 'setRGB')
 		adapterManager.addDummyMethod(device, 'setDiscoMode')
+		adapterManager.addDummyMethod(device, 'setColBrightness')
 
 		return res
 	end,
@@ -86,5 +87,31 @@ return {
 					'&iswhite=' ..  tostring(isWhite)
 			return domoticz.openURL(url)
 		end
+
+        function device.setColBrightness(color, brightness)
+            domoticz.log("device.setColBrightness called [" .. brightness .. "]", utils.LOG_INFO)
+            domoticz.log(color, utils.LOG_INFO)
+			if (not type(color) == 'table') then
+				domoticz.log('color parameter need to be a table with Domoticz color format', utils.LOG_ERROR)
+				return
+			end
+			if (not type(brightness) == 'number') then
+				domoticz.log('brightness value need to be number', utils.LOG_ERROR)
+				return
+            end
+			if (brightness < 0 or brightness > 255) then
+				domoticz.log('brightness value need to be number from 0-255', utils.LOG_ERROR)
+				return
+			end
+
+			local url
+			url = domoticz.settings['Domoticz url'] ..
+				'/json.htm?param=setcolbrightnessvalue&type=command&idx=' ..
+				device.id ..
+				'&color=' .. domoticz.utils.toJSON(color) ..
+				'&brightness=' .. tonumber(brightness)
+			return domoticz.openURL(url)
+		end
+
 	end
 }
