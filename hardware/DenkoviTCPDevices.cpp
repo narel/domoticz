@@ -32,7 +32,6 @@ CDenkoviTCPDevices::CDenkoviTCPDevices(const int ID, const std::string &IPAddres
 {
 	m_HwdID = ID;
 	m_usIPPort = usIPPort;
-	m_stoprequested = false;
 	m_bOutputLog = false;
 	m_iModel = model;
 	m_slaveId = slaveId;
@@ -57,10 +56,17 @@ bool CDenkoviTCPDevices::StartHardware()
 {
 	Init();
 
-	m_stoprequested = false;
 	m_bIsStarted = true;
 	m_uiTransactionCounter = 0;
 	m_uiReceivedDataLength = 0;
+
+	setCallbacks(
+		boost::bind(&CDenkoviTCPDevices::OnConnect, this),
+		boost::bind(&CDenkoviTCPDevices::OnDisconnect, this),
+		boost::bind(&CDenkoviTCPDevices::OnData, this, _1, _2),
+		boost::bind(&CDenkoviTCPDevices::OnErrorStd, this, _1),
+		boost::bind(&CDenkoviTCPDevices::OnErrorBoost, this, _1)
+	);
 
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&CDenkoviTCPDevices::Do_Work, this);
@@ -111,8 +117,6 @@ void CDenkoviTCPDevices::CreateRequest(uint8_t * pData, size_t length)
  
 void CDenkoviTCPDevices::OnData(const unsigned char * pData, size_t length)
 {
-	std::lock_guard<std::mutex> l(readQueueMutex);
-
 	switch (m_iModel) {
 	case DDEV_WIFI_16R: {
 		if (m_Cmd == DAE_WIFI16_ASK_CMD) {
@@ -197,18 +201,7 @@ void CDenkoviTCPDevices::OnDisconnect() {
 	}
 }
 
-void CDenkoviTCPDevices::OnError(const boost::system::error_code& error) {
-	switch (m_iModel) {
-	case DDEV_WIFI_16R:
-		_log.Log(LOG_STATUS, "WiFi 16 Relays-VCP: Error occured.");
-		break;
-	case DDEV_WIFI_16R_Modbus:
-		_log.Log(LOG_STATUS, "WiFi 16 Relays-TCP Modbus: Error occured.");
-		break;
-	}
-}
-
-void CDenkoviTCPDevices::OnError(const std::exception e)
+void CDenkoviTCPDevices::OnErrorStd(const std::exception e)
 {
 	switch (m_iModel) {
 	case DDEV_WIFI_16R:
@@ -220,13 +213,24 @@ void CDenkoviTCPDevices::OnError(const std::exception e)
 	}
 }
 
+void CDenkoviTCPDevices::OnErrorBoost(const boost::system::error_code& error) {
+	switch (m_iModel) {
+	case DDEV_WIFI_16R:
+		_log.Log(LOG_STATUS, "WiFi 16 Relays-VCP: Error occured.");
+		break;
+	case DDEV_WIFI_16R_Modbus:
+		_log.Log(LOG_STATUS, "WiFi 16 Relays-TCP Modbus: Error occured.");
+		break;
+	}
+}
+
 bool CDenkoviTCPDevices::StopHardware()
 {
 	if (m_thread != NULL)
 	{
-		assert(m_thread);
-		m_stoprequested = true;
+		RequestStop();
 		m_thread->join();
+		m_thread.reset();
 	}
 	m_bIsStarted = false;
 	return true;
@@ -239,7 +243,7 @@ void CDenkoviTCPDevices::Do_Work()
 
 	int msec_counter = 0;
 
-	while (!m_stoprequested)
+	while (!IsStopRequested(100))
 	{
 		m_LastHeartbeat = mytime(NULL);
 		if (m_bFirstTime)
@@ -247,13 +251,11 @@ void CDenkoviTCPDevices::Do_Work()
 			m_bFirstTime = false;
 			if (!mIsConnected)
 			{
-				m_rxbufferpos = 0;
 				connect(m_szIPAddress, m_usIPPort);
 			}
 		}
 		else
 		{
-			sleep_milliseconds(100);
 			update();
 			if (msec_counter++ >= poll_interval) {
 				msec_counter = 0;
@@ -262,6 +264,8 @@ void CDenkoviTCPDevices::Do_Work()
 			}
 		}
 	}
+
+	terminate();
 
 	switch (m_iModel) {
 	case DDEV_WIFI_16R:

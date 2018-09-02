@@ -48,7 +48,6 @@ m_szIPAddress(IPAddress)
 {
 	m_HwdID=ID;
 	m_bDoRestart=false;
-	m_stoprequested=false;
 	m_usIPPort=usIPPort;
 	m_retrycntr = RETRY_DELAY;
 	m_limiter = new(Ec3kLimiter);
@@ -60,12 +59,19 @@ Ec3kMeterTCP::~Ec3kMeterTCP(void)
 
 bool Ec3kMeterTCP::StartHardware()
 {
-	m_stoprequested=false;
 	m_bDoRestart=false;
 
 	//force connect the next first time
 	m_retrycntr=RETRY_DELAY;
 	m_bIsStarted=true;
+
+	setCallbacks(
+		boost::bind(&Ec3kMeterTCP::OnConnect, this),
+		boost::bind(&Ec3kMeterTCP::OnDisconnect, this),
+		boost::bind(&Ec3kMeterTCP::OnData, this, _1, _2),
+		boost::bind(&Ec3kMeterTCP::OnErrorStd, this, _1),
+		boost::bind(&Ec3kMeterTCP::OnErrorBoost, this, _1)
+	);
 
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&Ec3kMeterTCP::Do_Work, this);
@@ -75,10 +81,10 @@ bool Ec3kMeterTCP::StartHardware()
 
 bool Ec3kMeterTCP::StopHardware()
 {
-	m_stoprequested=true;
 	try {
 		if (m_thread)
 		{
+			RequestStop();
 			m_thread->join();
 			m_thread.reset();
 		}
@@ -87,16 +93,6 @@ bool Ec3kMeterTCP::StopHardware()
 	{
 		//Don't throw from a Stop command
 	}
-	if (isConnected())
-	{
-		try {
-			disconnect();
-		} catch(...)
-		{
-			//Don't throw from a Stop command
-		}
-	}
-
 	m_bIsStarted=false;
 	return true;
 }
@@ -119,9 +115,8 @@ void Ec3kMeterTCP::Do_Work()
 {
 	bool bFirstTime=true;
 	int sec_counter = 0;
-	while (!m_stoprequested)
+	while (!IsStopRequested(1000))
 	{
-		sleep_seconds(1);
 		sec_counter++;
 
 		if (sec_counter  % 12 == 0) {
@@ -142,21 +137,22 @@ void Ec3kMeterTCP::Do_Work()
 			update();
 		}
 	}
+	terminate();
+
 	_log.Log(LOG_STATUS,"Ec3kMeter: TCP/IP Worker stopped...");
 }
 
 void Ec3kMeterTCP::OnData(const unsigned char *pData, size_t length)
 {
-	std::lock_guard<std::mutex> l(readQueueMutex);
 	ParseData(pData,length);
 }
 
-void Ec3kMeterTCP::OnError(const std::exception e)
+void Ec3kMeterTCP::OnErrorStd(const std::exception e)
 {
 	_log.Log(LOG_ERROR,"Ec3kMeter: Error: %s",e.what());
 }
 
-void Ec3kMeterTCP::OnError(const boost::system::error_code& error)
+void Ec3kMeterTCP::OnErrorBoost(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -260,7 +256,7 @@ void Ec3kMeterTCP::ParseData(const unsigned char *pData, int Len)
 	// update only when the update interval has elapsed
 	if (m_limiter->update(id))
 	{
-		int ws = data[WS].asInt();
+		double ws = data[WS].asDouble();
 		float w_current = data[W_CURRENT].asFloat();
 		float w_max = data[W_MAX].asFloat();
 		//int s_time_on = data[TIME_ON].asInt();
@@ -272,7 +268,7 @@ void Ec3kMeterTCP::ParseData(const unsigned char *pData, int Len)
 		std::stringstream sensorNameKwhSS;
 		sensorNameKwhSS << "EC3K meter " << std::hex << id << " Usage";
 		const std::string sensorNameKwh = sensorNameKwhSS.str();
-		SendKwhMeter(id, 1, 255, w_current, (double)ws / 3600 / 1000, sensorNameKwh);
+		SendKwhMeter(id, 1, 255, w_current, ((ws / 3600.0) / 1000.0), sensorNameKwh);
 
 		std::stringstream sensorNameWMaxSS;
 		sensorNameWMaxSS << "EC3K meter " << std::hex << id << " maximum";

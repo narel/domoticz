@@ -53,7 +53,6 @@ MochadTCP::MochadTCP(const int ID, const std::string &IPAddress, const unsigned 
 m_szIPAddress(IPAddress)
 {
 	m_HwdID=ID;
-	m_stoprequested=false;
 	m_bDoRestart = false;
 	m_usIPPort=usIPPort;
 	m_linecount=0;
@@ -92,12 +91,19 @@ MochadTCP::~MochadTCP(void)
 
 bool MochadTCP::StartHardware()
 {
-	m_stoprequested=false;
 	m_bDoRestart = false;
 
 	//force connect the next first time
 //	m_retrycntr=RETRY_DELAY;
 //	m_bIsStarted=true;
+
+	setCallbacks(
+		boost::bind(&MochadTCP::OnConnect, this),
+		boost::bind(&MochadTCP::OnDisconnect, this),
+		boost::bind(&MochadTCP::OnData, this, _1, _2),
+		boost::bind(&MochadTCP::OnErrorStd, this, _1),
+		boost::bind(&MochadTCP::OnErrorBoost, this, _1)
+	);
 
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&MochadTCP::Do_Work, this);
@@ -107,15 +113,11 @@ bool MochadTCP::StartHardware()
 
 bool MochadTCP::StopHardware()
 {
-	m_stoprequested = true;
-	if (isConnected())
+	if (m_thread)
 	{
-		try {
-			disconnect();
-		} catch(...)
-		{
-			//Don't throw from a Stop command
-		}
+		RequestStop();
+		m_thread->join();
+		m_thread.reset();
 	}
 	m_bIsStarted=false;
 	return true;
@@ -139,7 +141,6 @@ void MochadTCP::OnDisconnect()
 
 void MochadTCP::OnData(const unsigned char *pData, size_t length)
 {
-	std::lock_guard<std::mutex> l(readQueueMutex);
 	ParseData(pData, length);
 }
 
@@ -147,7 +148,7 @@ void MochadTCP::Do_Work()
 {
 	bool bFirstTime = true;
 
-	while (!m_stoprequested)
+	while (!IsStopRequested(40))
 	{
 
 		time_t atime = mytime(NULL);
@@ -163,7 +164,6 @@ void MochadTCP::Do_Work()
 			bFirstTime = false;
 			if (!mIsConnected)
 			{
-				m_rxbufferpos = 0;
 				connect(m_szIPAddress, m_usIPPort);
 			}
 		}
@@ -174,19 +174,20 @@ void MochadTCP::Do_Work()
 				_log.Log(LOG_STATUS, "Mochad: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
 				connect(m_szIPAddress, m_usIPPort);
 			}
-			sleep_milliseconds(40);
 			update();
 		}
 	}
+	terminate();
+
 	_log.Log(LOG_STATUS,"Mochad: TCP/IP Worker stopped...");
 }
 
-void MochadTCP::OnError(const std::exception e)
+void MochadTCP::OnErrorStd(const std::exception e)
 {
 	_log.Log(LOG_ERROR, "Mochad: Error: %s", e.what());
 }
 
-void MochadTCP::OnError(const boost::system::error_code& error)
+void MochadTCP::OnErrorBoost(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||

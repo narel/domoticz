@@ -142,16 +142,6 @@ bool DomoticzTCP::StopHardware()
 
 bool DomoticzTCP::StopHardwareTCP()
 {
-	if (isConnected())
-	{
-		try {
-			disconnectTCP();
-		}
-		catch (...)
-		{
-			//Don't throw from a Stop command
-		}
-	}
 	try {
 		if (m_thread)
 		{
@@ -163,6 +153,16 @@ bool DomoticzTCP::StopHardwareTCP()
 	catch (...)
 	{
 		//Don't throw from a Stop command
+	}
+	if (isConnected())
+	{
+		try {
+			disconnectTCP();
+		}
+		catch (...)
+		{
+			//Don't throw from a Stop command
+		}
 	}
 	m_bIsStarted = false;
 	return true;
@@ -213,17 +213,11 @@ bool DomoticzTCP::ConnectInternal()
 
 void DomoticzTCP::disconnectTCP()
 {
-	m_stoprequested = true;
 	if (m_socket != INVALID_SOCKET)
 	{
 		shutdown(m_socket, SHUT_RDWR);
 		closesocket(m_socket);
 		m_socket = INVALID_SOCKET;
-		sleep_seconds(1);
-	}
-	if (m_thread)
-	{
-		m_thread->join();
 	}
 }
 
@@ -280,7 +274,7 @@ void DomoticzTCP::Do_Work()
 			else
 			{
 				std::lock_guard<std::mutex> l(readQueueMutex);
-				onRFXMessage((const unsigned char *)&buf, bread);
+				onInternalMessage((const unsigned char *)&buf, bread, false); // Do not check validity, this might be non RFX-message
 			}
 		}
 
@@ -418,7 +412,7 @@ void DomoticzTCP::FromProxy(const unsigned char *data, size_t datalen)
 {
 	/* data received from slave */
 	std::lock_guard<std::mutex> l(readQueueMutex);
-	onRFXMessage(data, datalen);
+	onInternalMessage(data, datalen);
 }
 
 std::string DomoticzTCP::GetToken()
