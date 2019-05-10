@@ -1,8 +1,8 @@
 #include "stdafx.h"
 #include "Comm5TCP.h"
+#include "../main/Helper.h"
 #include "../main/localtime_r.h"
 #include "../main/Logger.h"
-#include "../main/Helper.h"
 #include "../main/RFXtrx.h"
 
 #define RETRY_DELAY 30
@@ -49,24 +49,18 @@ m_szIPAddress(IPAddress)
 
 bool Comm5TCP::StartHardware()
 {
+	RequestStart();
+
 	m_bReceiverStarted = false;
 
 	//force connect the next first time
 	m_bIsStarted = true;
 
-	setCallbacks(
-		boost::bind(&Comm5TCP::OnConnect, this),
-		boost::bind(&Comm5TCP::OnDisconnect, this),
-		boost::bind(&Comm5TCP::OnData, this, _1, _2),
-		boost::bind(&Comm5TCP::OnErrorStd, this, _1),
-		boost::bind(&Comm5TCP::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&Comm5TCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "Comm5TCP");
+	SetThreadNameInt(m_thread->native_handle());
 
-	_log.Log(LOG_STATUS, "Comm5 MA-5XXX: Started");
+	Log(LOG_STATUS, "Started");
 
 	return (m_thread != nullptr);
 }
@@ -85,7 +79,7 @@ bool Comm5TCP::StopHardware()
 
 void Comm5TCP::OnConnect()
 {
-	_log.Log(LOG_STATUS, "Comm5 MA-5XXX: connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+	Log(LOG_STATUS, "connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
 	m_bIsStarted = true;
 	notificationEnabled = false;
 
@@ -97,36 +91,27 @@ void Comm5TCP::OnConnect()
 
 void Comm5TCP::OnDisconnect()
 {
-	_log.Log(LOG_ERROR, "Comm5 MA-5XXX: disconected");
+	Log(LOG_ERROR, "disconected");
 }
 
 void Comm5TCP::Do_Work()
 {
-	bool bFirstTime = true;
-	int count = 0;
-	while (!IsStopRequested(40))
+	int sec_counter = 0;
+	connect(m_szIPAddress, m_usIPPort);
+	while (!IsStopRequested(1000))
 	{
-		m_LastHeartbeat = mytime(NULL);
-		if (bFirstTime)
-		{
-			bFirstTime = false;
-			if (!mIsConnected)
-			{
-				connect(m_szIPAddress, m_usIPPort);
-			}
+		sec_counter++;
+
+		if (sec_counter % 12 == 0) {
+			m_LastHeartbeat = mytime(NULL);
 		}
-		else
-		{
-			update();
-			if (count++ >= 100) {
-				count = 0;
-				querySensorState();
-			}
+		if (sec_counter % 4 == 0) {
+			querySensorState();
 		}
 	}
 	terminate();
 
-	_log.Log(LOG_STATUS, "Comm5 MA-5XXX: TCP/IP Worker stopped...");
+	Log(LOG_STATUS, "TCP/IP Worker stopped...");
 }
 
 void Comm5TCP::processSensorData(const std::string& line)
@@ -198,7 +183,7 @@ bool Comm5TCP::WriteToHardware(const char *pdata, const unsigned char /*length*/
 	unsigned char packettype = pSen->ICMND.packettype;
 	//unsigned char subtype = pSen->ICMND.subtype;
 
-	if (!mIsConnected)
+	if (!isConnected())
 		return false;
 
 	if (packettype == pTypeLighting2 && pSen->LIGHTING2.id3 == 0)
@@ -224,12 +209,12 @@ void Comm5TCP::OnData(const unsigned char *pData, size_t length)
 	ParseData(pData, length);
 }
 
-void Comm5TCP::OnErrorStd(const std::exception e)
+void Comm5TCP::OnError(const std::exception e)
 {
-	_log.Log(LOG_ERROR, "Comm5 MA-5XXX: Error: %s", e.what());
+	Log(LOG_ERROR, "Error: %s", e.what());
 }
 
-void Comm5TCP::OnErrorBoost(const boost::system::error_code& error)
+void Comm5TCP::OnError(const boost::system::error_code& error)
 {
 	switch (error.value())
 	{
@@ -238,13 +223,13 @@ void Comm5TCP::OnErrorBoost(const boost::system::error_code& error)
 	case boost::asio::error::access_denied:
 	case boost::asio::error::host_unreachable:
 	case boost::asio::error::timed_out:
-		_log.Log(LOG_ERROR, "Comm5 MA-5XXX: Can not connect to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+		Log(LOG_ERROR, "Can not connect to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
 		break;
 	case boost::asio::error::eof:
 	case boost::asio::error::connection_reset:
-		_log.Log(LOG_ERROR, "Comm5 MA-5XXX: Connection reset!");
+		Log(LOG_ERROR, "Connection reset!");
 		break;
 	default:
-		_log.Log(LOG_ERROR, "Comm5 MA-5XXX: %s", error.message().c_str());
+		Log(LOG_ERROR, "%s", error.message().c_str());
 	}
 }

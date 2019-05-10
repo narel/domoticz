@@ -19,23 +19,17 @@ CRFLinkTCP::~CRFLinkTCP(void)
 
 bool CRFLinkTCP::StartHardware()
 {
+	RequestStart();
+
 	m_bDoRestart=false;
 
 	//force connect the next first time
 	m_retrycntr = RFLINK_RETRY_DELAY;
 	m_bIsStarted=true;
 
-	setCallbacks(
-		boost::bind(&CRFLinkTCP::OnConnect, this),
-		boost::bind(&CRFLinkTCP::OnDisconnect, this),
-		boost::bind(&CRFLinkTCP::OnData, this, _1, _2),
-		boost::bind(&CRFLinkTCP::OnErrorStd, this, _1),
-		boost::bind(&CRFLinkTCP::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&CRFLinkTCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "RFLinkTCP");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -64,24 +58,27 @@ void CRFLinkTCP::OnConnect()
 
 void CRFLinkTCP::OnDisconnect()
 {
+	// Note: No need to set m_bDoRestart = true here, the connection is automatically reinited by ASyncTCP
 	_log.Log(LOG_STATUS,"RFLink: disconnected");
-	m_bDoRestart = true;
 }
 
 void CRFLinkTCP::Do_Work()
 {
 	bool bFirstTime=true;
 	int sec_counter = 0;
+	_log.Log(LOG_STATUS, "RFLink: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+	connect(m_szIPAddress,m_usIPPort);
 	while (!IsStopRequested(1000))
 	{
 		sec_counter++;
 
 		time_t atime = mytime(NULL);
 		if (sec_counter % 12 == 0) {
-			m_LastHeartbeat= atime;
+			m_LastHeartbeat = mytime(NULL);
 		}
-		if ((sec_counter % 20 == 0) && (mIsConnected))
+		if ((sec_counter % 20 == 0) && (isConnected()))
 		{
+			time_t atime = mytime(NULL);
 			//Send ping (keep alive)
 			if (atime - m_LastReceivedTime > 30)
 			{
@@ -89,53 +86,18 @@ void CRFLinkTCP::Do_Work()
 				_log.Log(LOG_ERROR, "RFLink: Nothing received for more than 30 seconds, restarting...");
 				m_retrycntr = 0;
 				m_LastReceivedTime = atime;
+				//TODO: Add method to ASyncTCP to schedule a reconnect
 				m_bDoRestart = true;
-				try {
-					disconnect();
-					close();
-				}
-				catch (...)
-				{
-					//Don't throw from a Stop command
-				}
 			}
 			else
 				write("10;PING;\n");
 		}
 
-		if (bFirstTime)
+		if ((m_bDoRestart) && (sec_counter % 30 == 0))
 		{
-			bFirstTime=false;
-			if (mIsConnected)
-			{
-				try {
-					disconnect();
-					close();
-				}
-				catch (...)
-				{
-					//Don't throw from a Stop command
-				}
-			}
 			_log.Log(LOG_STATUS, "RFLink: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-			connect(m_szIPAddress,m_usIPPort);
-		}
-		else
-		{
-			if ((m_bDoRestart) && (sec_counter % 30 == 0))
-			{
-				_log.Log(LOG_STATUS, "RFLink: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-				try {
-					disconnect();
-					close();
-				}
-				catch (...)
-				{
-					//Don't throw from a Stop command
-				}
-				connect(m_szIPAddress, m_usIPPort);
-			}
-			update();
+			disconnect();
+			connect(m_szIPAddress, m_usIPPort);
 		}
 	}
 	terminate();
@@ -148,12 +110,12 @@ void CRFLinkTCP::OnData(const unsigned char *pData, size_t length)
 	ParseData((const char*)pData,length);
 }
 
-void CRFLinkTCP::OnErrorStd(const std::exception e)
+void CRFLinkTCP::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR,"RFLink: Error: %s",e.what());
 }
 
-void CRFLinkTCP::OnErrorBoost(const boost::system::error_code& error)
+void CRFLinkTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -178,7 +140,7 @@ void CRFLinkTCP::OnErrorBoost(const boost::system::error_code& error)
 
 bool CRFLinkTCP::WriteInt(const std::string &sendString)
 {
-	if (!mIsConnected)
+	if (!isConnected())
 	{
 		return false;
 	}

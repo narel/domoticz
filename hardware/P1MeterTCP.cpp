@@ -4,11 +4,7 @@
 #include "../main/Helper.h"
 #include "../main/localtime_r.h"
 
-#define SLEEP_MILLISECONDS 200
-#define RETRY_DELAY_SECONDS 30
-#define HEARTBEAT_SECONDS 12
-
-P1MeterTCP::P1MeterTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort, const bool disable_crc, const int ratelimit) :
+P1MeterTCP::P1MeterTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort, const bool disable_crc, const int ratelimit):
 	m_szIPAddress(IPAddress),
 	m_usIPPort(usIPPort)
 {
@@ -24,19 +20,13 @@ P1MeterTCP::~P1MeterTCP(void)
 
 bool P1MeterTCP::StartHardware()
 {
-	m_bIsStarted = true;
+	RequestStart();
 
-	setCallbacks(
-		boost::bind(&P1MeterTCP::OnConnect, this),
-		boost::bind(&P1MeterTCP::OnDisconnect, this),
-		boost::bind(&P1MeterTCP::OnData, this, _1, _2),
-		boost::bind(&P1MeterTCP::OnErrorStd, this, _1),
-		boost::bind(&P1MeterTCP::OnErrorBoost, this, _1)
-	);
+	m_bIsStarted = true;
 
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&P1MeterTCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "P1MeterTCP");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -56,33 +46,14 @@ bool P1MeterTCP::StopHardware()
 
 void P1MeterTCP::Do_Work()
 {
-	int heartbeat_counter = 0;
-	int retry_counter = 0;
-	while (!IsStopRequested(SLEEP_MILLISECONDS))
+	int sec_counter = 0;
+	_log.Log(LOG_STATUS, "P1MeterTCP: attempt connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+	connect(m_szIPAddress, m_usIPPort);
+	while (!IsStopRequested(1000))
 	{
-		if (mIsConnected)
-		{
-			update();
-		}
-		else
-		{
-			if ((retry_counter % (RETRY_DELAY_SECONDS * 1000 / SLEEP_MILLISECONDS)) == 0)
-			{
-				_log.Log(LOG_STATUS, "P1MeterTCP: attempt connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-				connect(m_szIPAddress, m_usIPPort);
-				update();
-			}
-			else if ((retry_counter % (RETRY_DELAY_SECONDS * 1000 / SLEEP_MILLISECONDS)) <= (1000 / SLEEP_MILLISECONDS))
-			{
-				// allow for up to 1 second connect time
-				update();
-			}
-			retry_counter++;
-		}
+		sec_counter++;
 
-		heartbeat_counter++;
-		if ((heartbeat_counter % (HEARTBEAT_SECONDS * 1000 / SLEEP_MILLISECONDS)) == 0)
-		{
+		if (sec_counter % 12 == 0) {
 			m_LastHeartbeat = mytime(NULL);
 		}
 	}
@@ -120,17 +91,17 @@ void P1MeterTCP::OnDisconnect()
 
 void P1MeterTCP::OnData(const unsigned char *pData, size_t length)
 {
-	ParseData((const unsigned char*)pData, length, m_bDisableCRC, m_ratelimit);
+	ParseP1Data((const unsigned char*)pData, length, m_bDisableCRC, m_ratelimit);
 }
 
 
-void P1MeterTCP::OnErrorStd(const std::exception e)
+void P1MeterTCP::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR, "P1MeterTCP: Error: %s", e.what());
 }
 
 
-void P1MeterTCP::OnErrorBoost(const boost::system::error_code& error)
+void P1MeterTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||

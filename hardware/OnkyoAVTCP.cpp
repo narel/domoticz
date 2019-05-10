@@ -130,10 +130,9 @@ static struct {
 
 
 OnkyoAVTCP::OnkyoAVTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort) :
-m_szIPAddress(IPAddress)
+	m_szIPAddress(IPAddress)
 {
 	m_HwdID=ID;
-	m_bDoRestart=false;
 	m_usIPPort=usIPPort;
 	m_retrycntr = RETRY_DELAY;
 	m_pPartialPkt = NULL;
@@ -153,23 +152,15 @@ OnkyoAVTCP::~OnkyoAVTCP(void)
 
 bool OnkyoAVTCP::StartHardware()
 {
-	m_bDoRestart=false;
+	RequestStart();
 
 	//force connect the next first time
 	m_retrycntr=RETRY_DELAY;
 	m_bIsStarted=true;
 
-	setCallbacks(
-		boost::bind(&OnkyoAVTCP::OnConnect, this),
-		boost::bind(&OnkyoAVTCP::OnDisconnect, this),
-		boost::bind(&OnkyoAVTCP::OnData, this, _1, _2),
-		boost::bind(&OnkyoAVTCP::OnErrorStd, this, _1),
-		boost::bind(&OnkyoAVTCP::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&OnkyoAVTCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "OnkyoAVTCP");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -188,7 +179,6 @@ bool OnkyoAVTCP::StopHardware()
 void OnkyoAVTCP::OnConnect()
 {
 	_log.Log(LOG_STATUS,"OnkyoAVTCP: connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-	m_bDoRestart=false;
 	m_bIsStarted=true;
 
 	SendPacket("NRIQSTN");
@@ -202,28 +192,14 @@ void OnkyoAVTCP::OnDisconnect()
 
 void OnkyoAVTCP::Do_Work()
 {
-	bool bFirstTime=true;
 	int sec_counter = 0;
+	connect(m_szIPAddress, m_usIPPort);
 	while (!IsStopRequested(1000))
 	{
 		sec_counter++;
 
 		if (sec_counter  % 12 == 0) {
-			m_LastHeartbeat=mytime(NULL);
-		}
-
-		if (bFirstTime)
-		{
-			bFirstTime=false;
-			connect(m_szIPAddress,m_usIPPort);
-		}
-		else
-		{
-			if ((m_bDoRestart) && (sec_counter % 30 == 0))
-			{
-				connect(m_szIPAddress,m_usIPPort);
-			}
-			update();
+			m_LastHeartbeat = mytime(NULL);
 		}
 	}
 	terminate();
@@ -236,12 +212,12 @@ void OnkyoAVTCP::OnData(const unsigned char *pData, size_t length)
 	ParseData(pData,length);
 }
 
-void OnkyoAVTCP::OnErrorStd(const std::exception e)
+void OnkyoAVTCP::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR,"OnkyoAVTCP: Error: %s",e.what());
 }
 
-void OnkyoAVTCP::OnErrorBoost(const boost::system::error_code& error)
+void OnkyoAVTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -266,7 +242,7 @@ void OnkyoAVTCP::OnErrorBoost(const boost::system::error_code& error)
 
 bool OnkyoAVTCP::WriteToHardware(const char *pdata, const unsigned char length)
 {
-	if (!mIsConnected || !pdata)
+	if (!isConnected() || !pdata)
 	{
 		return false;
 	}
@@ -324,7 +300,7 @@ bool OnkyoAVTCP::WriteToHardware(const char *pdata, const unsigned char length)
 
 bool OnkyoAVTCP::SendPacket(const char *pdata)
 {
-	if (!mIsConnected || !pdata)
+	if (!isConnected() || !pdata)
 	{
 		return false;
 	}

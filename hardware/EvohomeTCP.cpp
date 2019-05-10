@@ -7,7 +7,10 @@
 #include "../main/localtime_r.h"
 
 CEvohomeTCP::CEvohomeTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort, const std::string &UserContID) :
-CEvohomeRadio(ID, UserContID), m_szIPAddress(IPAddress), m_usIPPort(usIPPort)
+
+	CEvohomeRadio(ID, UserContID),
+	m_szIPAddress(IPAddress),
+	m_usIPPort(usIPPort)
 {
 }
 
@@ -56,65 +59,20 @@ void CEvohomeTCP::Do_Work()
     nStartup = 0;
     nStarts = 0;
 
-	bool bFirstTime = true;
 	int sec_counter = 0;
 
+	_log.Log(LOG_STATUS, "evohome TCP/IP: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+	connect(m_szIPAddress,m_usIPPort);
 	while (!IsStopRequested(1000))
 	{
 		sec_counter++;
 
-		time_t atime = mytime(NULL);
 		if (sec_counter % 12 == 0) {
-			m_LastHeartbeat= atime;
+			m_LastHeartbeat= mytime(NULL);
 		}
 
-		if (bFirstTime)
-		{
-			bFirstTime=false;
-
-			setCallbacks(
-				boost::bind(&CEvohomeTCP::OnConnect, this),
-				boost::bind(&CEvohomeTCP::OnDisconnect, this),
-				boost::bind(&CEvohomeTCP::OnData, this, _1, _2),
-				boost::bind(&CEvohomeTCP::OnErrorStd, this, _1),
-				boost::bind(&CEvohomeTCP::OnErrorBoost, this, _1)
-			);
-
-			if (mIsConnected)
-			{
-				try {
-					disconnect();
-					close();
-				}
-				catch (...)
-				{
-					//Don't throw from a Stop command
-				}
-			}
-			_log.Log(LOG_STATUS, "evohome TCP/IP: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-			connect(m_szIPAddress,m_usIPPort);
-		}
-		else
-		{
-			if ((m_bDoRestart) && (sec_counter % 30 == 0))
-			{
-				_log.Log(LOG_STATUS, "evohome TCP/IP: trying to connect to %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-				try {
-					disconnect();
-					close();
-				}
-				catch (...)
-				{
-					//Don't throw from a Stop command
-				}
-				connect(m_szIPAddress, m_usIPPort);
-			}
-            update();
-            Idle_Work();
-		}
+		Idle_Work();
 	}
-	terminate();
-
 	_log.Log(LOG_STATUS,"evohome TCP/IP: TCP/IP Worker stopped...");
 }
 
@@ -136,12 +94,12 @@ void CEvohomeTCP::Do_Send(std::string str)
     write(str);
 }
 
-void CEvohomeTCP::OnErrorStd(const std::exception e)
+void CEvohomeTCP::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR,"evohome TCP/IP: Error: %s",e.what());
 }
 
-void CEvohomeTCP::OnErrorBoost(const boost::system::error_code& error)
+void CEvohomeTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||

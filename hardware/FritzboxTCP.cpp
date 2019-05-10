@@ -36,10 +36,9 @@ datum;DISCONNECT;ConnectionID;dauerInSekunden;
 */
 
 FritzboxTCP::FritzboxTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort) :
-m_szIPAddress(IPAddress)
+	m_szIPAddress(IPAddress)
 {
 	m_HwdID=ID;
-	m_bDoRestart=false;
 	m_usIPPort=usIPPort;
 	m_retrycntr = RETRY_DELAY;
 	m_bufferpos = 0;
@@ -51,23 +50,15 @@ FritzboxTCP::~FritzboxTCP(void)
 
 bool FritzboxTCP::StartHardware()
 {
-	m_bDoRestart=false;
+	RequestStart();
 
 	//force connect the next first time
 	m_retrycntr=RETRY_DELAY;
 	m_bIsStarted=true;
 
-	setCallbacks(
-		boost::bind(&FritzboxTCP::OnConnect, this),
-		boost::bind(&FritzboxTCP::OnDisconnect, this),
-		boost::bind(&FritzboxTCP::OnData, this, _1, _2),
-		boost::bind(&FritzboxTCP::OnErrorStd, this, _1),
-		boost::bind(&FritzboxTCP::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&FritzboxTCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "FritzboxTCP");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -86,7 +77,6 @@ bool FritzboxTCP::StopHardware()
 void FritzboxTCP::OnConnect()
 {
 	_log.Log(LOG_STATUS,"Fritzbox: connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
-	m_bDoRestart=false;
 	m_bIsStarted=true;
 	m_bufferpos=0;
 
@@ -100,28 +90,14 @@ void FritzboxTCP::OnDisconnect()
 
 void FritzboxTCP::Do_Work()
 {
-	bool bFirstTime=true;
 	int sec_counter = 0;
+	connect(m_szIPAddress,m_usIPPort);
 	while (!IsStopRequested(1000))
 	{
 		sec_counter++;
 
 		if (sec_counter  % 12 == 0) {
-			m_LastHeartbeat=mytime(NULL);
-		}
-
-		if (bFirstTime)
-		{
-			bFirstTime=false;
-			connect(m_szIPAddress,m_usIPPort);
-		}
-		else
-		{
-			if ((m_bDoRestart) && (sec_counter % 30 == 0))
-			{
-				connect(m_szIPAddress,m_usIPPort);
-			}
-			update();
+			m_LastHeartbeat = mytime(NULL);
 		}
 	}
 	terminate();
@@ -134,12 +110,12 @@ void FritzboxTCP::OnData(const unsigned char *pData, size_t length)
 	ParseData(pData,length);
 }
 
-void FritzboxTCP::OnErrorStd(const std::exception e)
+void FritzboxTCP::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR,"Fritzbox: Error: %s",e.what());
 }
 
-void FritzboxTCP::OnErrorBoost(const boost::system::error_code& error)
+void FritzboxTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -164,7 +140,7 @@ void FritzboxTCP::OnErrorBoost(const boost::system::error_code& error)
 
 bool FritzboxTCP::WriteToHardware(const char *pdata, const unsigned char length)
 {
-	if (!mIsConnected)
+	if (!isConnected())
 	{
 		return false;
 	}
@@ -174,7 +150,7 @@ bool FritzboxTCP::WriteToHardware(const char *pdata, const unsigned char length)
 
 void FritzboxTCP::WriteInt(const std::string &sendStr)
 {
-	if (!mIsConnected)
+	if (!isConnected())
 	{
 		return;
 	}

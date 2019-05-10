@@ -9,11 +9,12 @@
 
 #define RETRY_DELAY 30
 
-RFXComTCP::RFXComTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort) :
-m_szIPAddress(IPAddress)
+RFXComTCP::RFXComTCP(const int ID, const std::string &IPAddress, const unsigned short usIPPort, const _eRFXAsyncType AsyncType) :
+	m_szIPAddress(IPAddress)
 {
 	m_HwdID=ID;
 	m_usIPPort=usIPPort;
+	m_AsyncType = AsyncType;
 	m_bReceiverStarted = false;
 }
 
@@ -23,23 +24,17 @@ RFXComTCP::~RFXComTCP(void)
 
 bool RFXComTCP::StartHardware()
 {
+	RequestStart();
+
 	m_bReceiverStarted = false;
 
 	//force connect the next first time
 	m_bIsStarted=true;
 	m_rxbufferpos=0;
 
-	setCallbacks(
-		boost::bind(&RFXComTCP::OnConnect, this),
-		boost::bind(&RFXComTCP::OnDisconnect, this),
-		boost::bind(&RFXComTCP::OnData, this, _1, _2),
-		boost::bind(&RFXComTCP::OnErrorStd, this, _1),
-		boost::bind(&RFXComTCP::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&RFXComTCP::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "RFXComTCP");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -57,7 +52,7 @@ bool RFXComTCP::StopHardware()
 
 void RFXComTCP::OnConnect()
 {
-	_log.Log(LOG_STATUS, "RFXCOM: connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+	Log(LOG_STATUS, "connected to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
 	m_bIsStarted = true;
 
 	sOnConnected(this);
@@ -65,32 +60,24 @@ void RFXComTCP::OnConnect()
 
 void RFXComTCP::OnDisconnect()
 {
-	_log.Log(LOG_STATUS, "RFXCOM: disconnected");
+	Log(LOG_STATUS, "disconnected");
 }
 
 void RFXComTCP::Do_Work()
 {
-	bool bFirstTime = true;
-	while (!IsStopRequested(40))
+	int sec_counter = 0;
+	connect(m_szIPAddress, m_usIPPort);
+	while (!IsStopRequested(1000))
 	{
-		m_LastHeartbeat = mytime(NULL);
-		if (bFirstTime)
-		{
-			bFirstTime = false;
-			if (!mIsConnected)
-			{
-				m_rxbufferpos = 0;
-				connect(m_szIPAddress, m_usIPPort);
-			}
-		}
-		else
-		{
-			update();
+		sec_counter++;
+
+		if (sec_counter  % 12 == 0) {
+			m_LastHeartbeat = mytime(NULL);
 		}
 	}
 	terminate();
 
-	_log.Log(LOG_STATUS,"RFXCOM: TCP/IP Worker stopped...");
+	Log(LOG_STATUS,"TCP/IP Worker stopped...");
 }
 
 void RFXComTCP::OnData(const unsigned char *pData, size_t length)
@@ -99,12 +86,12 @@ void RFXComTCP::OnData(const unsigned char *pData, size_t length)
 	onInternalMessage(pData, length);
 }
 
-void RFXComTCP::OnErrorStd(const std::exception e)
+void RFXComTCP::OnError(const std::exception e)
 {
-	_log.Log(LOG_ERROR, "RFXCOM: Error: %s", e.what());
+	Log(LOG_ERROR, "Error: %s", e.what());
 }
 
-void RFXComTCP::OnErrorBoost(const boost::system::error_code& error)
+void RFXComTCP::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -114,22 +101,22 @@ void RFXComTCP::OnErrorBoost(const boost::system::error_code& error)
 		(error == boost::asio::error::timed_out)
 		)
 	{
-		_log.Log(LOG_ERROR, "RFXCOM: Can not connect to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
+		Log(LOG_ERROR, "Can not connect to: %s:%d", m_szIPAddress.c_str(), m_usIPPort);
 	}
 	else if (
 		(error == boost::asio::error::eof) ||
 		(error == boost::asio::error::connection_reset)
 		)
 	{
-		_log.Log(LOG_STATUS, "RFXCOM: Connection reset!");
+		Log(LOG_STATUS, "Connection reset!");
 	}
 	else
-		_log.Log(LOG_ERROR, "RFXCOM: %s", error.message().c_str());
+		Log(LOG_ERROR, "%s", error.message().c_str());
 }
 
 bool RFXComTCP::WriteToHardware(const char *pdata, const unsigned char length)
 {
-	if (!mIsConnected)
+	if (!isConnected())
 		return false;
 	write((const unsigned char*)pdata, length);
 	return true;

@@ -22,7 +22,6 @@ CHEOS::CHEOS(const int ID, const std::string &IPAddress, const unsigned short us
 	m_Pwd(Pwd)
 {
 	m_HwdID = ID;
-	m_bDoRestart = false;
 	m_usIPPort = usIPPort;
 	m_retrycntr = RETRY_DELAY;
 	SetSettings(PollIntervalsec, PingTimeoutms);
@@ -505,11 +504,10 @@ void CHEOS::Do_Work()
 
 	ReloadNodes();
 
-	bool bFirstTime = true;
 	bool bCheckedForPlayers = false;
 	int sec_counter = 25;
 	m_lastUpdate = 25;
-
+	connect(m_IP, m_usIPPort);
 	while (!IsStopRequested(1000))
 	{
 		sec_counter++;
@@ -519,36 +517,22 @@ void CHEOS::Do_Work()
 			m_LastHeartbeat = mytime(NULL);
 		}
 
-		if (bFirstTime)
+		if (isConnected())
 		{
-			bFirstTime = false;
-			connect(m_IP, m_usIPPort);
-		}
-		else
-		{
-			if ((m_bDoRestart) && (sec_counter % 30 == 0))
+			if (!bCheckedForPlayers)
 			{
-				connect(m_IP, m_usIPPort);
+				// Update all players and groups
+				SendCommand("getPlayers");
+				bCheckedForPlayers = true;
+				// Enable event changes
+				SendCommand("registerForEvents");
 			}
-			update();
-			if (mIsConnected)
+			if (sec_counter % 30 == 0 && m_lastUpdate >= 30)//updates every 30 seconds
 			{
-				if (!bCheckedForPlayers)
+				std::vector<HEOSNode>::const_iterator itt;
+				for (itt = m_nodes.begin(); itt != m_nodes.end(); ++itt)
 				{
-					// Update all players and groups
-					SendCommand("getPlayers");
-					bCheckedForPlayers = true;
-					// Enable event changes
-					SendCommand("registerForEvents");
-				}
-				if (sec_counter % 30 == 0 && m_lastUpdate >= 30)//updates every 30 seconds
-				{
-					bFirstTime = false;
-					std::vector<HEOSNode>::const_iterator itt;
-					for (itt = m_nodes.begin(); itt != m_nodes.end(); ++itt)
-					{
-						SendCommand("getPlayState", itt->DevID);
-					}
+					SendCommand("getPlayState", itt->DevID);
 				}
 			}
 		}
@@ -574,23 +558,15 @@ _eNotificationTypes	CHEOS::NotificationType(_eMediaStatus nStatus)
 
 bool CHEOS::StartHardware()
 {
-	m_bDoRestart = false;
+	RequestStart();
 
 	//force connect the next first time
 	m_retrycntr = RETRY_DELAY;
 	m_bIsStarted = true;
 
-	setCallbacks(
-		boost::bind(&CHEOS::OnConnect, this),
-		boost::bind(&CHEOS::OnDisconnect, this),
-		boost::bind(&CHEOS::OnData, this, _1, _2),
-		boost::bind(&CHEOS::OnErrorStd, this, _1),
-		boost::bind(&CHEOS::OnErrorBoost, this, _1)
-	);
-
 	//Start worker thread
 	m_thread = std::make_shared<std::thread>(&CHEOS::Do_Work, this);
-	SetThreadName(m_thread->native_handle(), "HEOS");
+	SetThreadNameInt(m_thread->native_handle());
 	return (m_thread != nullptr);
 }
 
@@ -609,7 +585,6 @@ bool CHEOS::StopHardware()
 void CHEOS::OnConnect()
 {
 	_log.Log(LOG_STATUS, "HEOS by DENON: Connected to: %s:%d", m_IP.c_str(), m_usIPPort);
-	m_bDoRestart = false;
 	m_bIsStarted = true;
 	m_bufferpos = 0;
 	sOnConnected(this);
@@ -625,12 +600,12 @@ void CHEOS::OnData(const unsigned char *pData, size_t length)
 	ParseData(pData, length);
 }
 
-void CHEOS::OnErrorStd(const std::exception e)
+void CHEOS::OnError(const std::exception e)
 {
 	_log.Log(LOG_ERROR, "HEOS by DENON: Error: %s", e.what());
 }
 
-void CHEOS::OnErrorBoost(const boost::system::error_code& error)
+void CHEOS::OnError(const boost::system::error_code& error)
 {
 	if (
 		(error == boost::asio::error::address_in_use) ||
@@ -684,7 +659,7 @@ void CHEOS::ParseData(const unsigned char *pData, int Len)
 /*
 bool CHEOS::WriteInt(const unsigned char *pData, const unsigned char Len)
 {
-	if (!mIsConnected)
+	if (!isConnected())
 	{
 		return false;
 	}
@@ -698,7 +673,7 @@ bool CHEOS::WriteInt(const std::string &sendStr)
 	std::stringstream ssSend;
 	std::string	sSend;
 
-	if (!mIsConnected)
+	if (!isConnected())
 	{
 		return false;
 	}
